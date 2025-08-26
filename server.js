@@ -17,13 +17,20 @@ const otpRequestLimit = new Map()
 dotenv.config()
 
 const app = express()
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-})
+// PostgreSQL connection (supports DATABASE_URL for Railway/Cloud providers)
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DB_SSL === "require" ? { rejectUnauthorized: false } : false,
+    })
+  : new Pool({
+      user: process.env.DB_USER,
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      port: process.env.DB_PORT,
+      ssl: process.env.DB_SSL === "require" ? { rejectUnauthorized: false } : false,
+    })
 
 // CORS configuration - ปรับปรุงให้รองรับหลาย origin
 app.use(
