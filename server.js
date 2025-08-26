@@ -32,10 +32,17 @@ const pool = process.env.DATABASE_URL
       ssl: process.env.DB_SSL === "require" ? { rejectUnauthorized: false } : false,
     })
 
-// CORS configuration - ปรับปรุงให้รองรับหลาย origin
+// CORS configuration - รองรับหลาย origin ผ่าน ENV ALLOWED_ORIGINS (คั่นด้วย ,)
+const defaultOrigins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"]
+const envOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean)
+const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins
+
 app.use(
   cors({
-    origin: ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001"],
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
