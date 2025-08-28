@@ -27,6 +27,32 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 })
 
+// Ensure required tables/columns exist
+const ensureSchema = async () => {
+  try {
+    // password_resets table (used by reset password flow)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_resets (
+        email TEXT PRIMARY KEY,
+        token TEXT NOT NULL,
+        expires_at TIMESTAMP NOT NULL
+      )
+    `)
+
+    // reservations.reminder_sent column (used by reminder cron)
+    await pool.query(`
+      ALTER TABLE reservations
+      ADD COLUMN IF NOT EXISTS reminder_sent BOOLEAN DEFAULT FALSE
+    `)
+
+    console.log("✅ Schema ensured: password_resets table and reservations.reminder_sent column")
+  } catch (schemaError) {
+    console.error("❌ Error ensuring schema:", schemaError)
+  }
+}
+
+ensureSchema()
+
 // CORS configuration - ปรับปรุงให้รองรับหลาย origin
 app.use(
   cors({
@@ -88,14 +114,14 @@ const getPublicBaseUrl = () => {
   if (process.env.R2_PUBLIC_BASE_URL) {
     return process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")
   }
-  return `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET}`
+  return `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME}`
 }
 
 const sanitizeFilename = (name) => name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "")
 
 const uploadBufferToR2 = async (buffer, key, contentType) => {
   const command = new PutObjectCommand({
-    Bucket: process.env.R2_BUCKET,
+    Bucket: process.env.R2_BUCKET_NAME,
     Key: key,
     Body: buffer,
     ContentType: contentType || "application/octet-stream",
