@@ -2,6 +2,7 @@ require("dotenv").config()
 const express = require("express")
 const cors = require("cors")
 const multer = require("multer")
+const multerS3 = require("multer-s3")
 const jwt = require("jsonwebtoken")
 const dotenv = require("dotenv")
 const { Pool } = require("pg")
@@ -82,54 +83,42 @@ app.get("/api/health", (req, res) => {
   })
 })
 
-// R2 S3 Client
+// R2 S3 Client (ใช้ endpoint จาก .env)
 const r2 = new S3Client({
   region: "auto",
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  endpoint: process.env.R2_PUBLIC_URL,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 })
 
-// ใช้ memory storage แทน disk storage
-const storage = multer.memoryStorage()
+// ตั้งค่า multer ให้เก็บไฟล์ลง R2 โดยตรง
+const sanitizeFilename = (name) => name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "")
+
 const upload = multer({
-  storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
+  storage: multerS3({
+    s3: r2,
+    bucket: process.env.R2_BUCKET_NAME,
+    acl: "public-read",
+    contentType: multerS3.AUTO_CONTENT_TYPE,
+    key: (req, file, cb) => {
+      const timestamp = Date.now()
+      const original = sanitizeFilename(file.originalname || "upload.bin")
+      // เส้นทางเริ่มต้นจะถูกกำหนดในแต่ละ endpoint หากต้องการเฉพาะเจาะจง
+      // ที่นี่ตั้งค่า default โฟลเดอร์
+      const defaultFolder = req._uploadPrefix || "uploads"
+      cb(null, `${defaultFolder}/${timestamp}-${original}`)
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    // ตรวจสอบประเภทไฟล์
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true)
-    } else {
-      cb(new Error("กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น"), false)
-    }
+    if (file.mimetype.startsWith("image/")) return cb(null, true)
+    return cb(new Error("กรุณาอัปโหลดไฟล์รูปภาพเท่านั้น"), false)
   },
 })
 
-// Helper: อัปโหลดไฟล์ขึ้น R2 และคืนค่า URL
-const getPublicBaseUrl = () => {
-  if (process.env.R2_PUBLIC_BASE_URL) {
-    return process.env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")
-  }
-  return `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${process.env.R2_BUCKET_NAME}`
-}
-
-const sanitizeFilename = (name) => name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9._-]/g, "")
-
-const uploadBufferToR2 = async (buffer, key, contentType) => {
-  const command = new PutObjectCommand({
-    Bucket: process.env.R2_BUCKET_NAME,
-    Key: key,
-    Body: buffer,
-    ContentType: contentType || "application/octet-stream",
-  })
-  await r2.send(command)
-  const base = getPublicBaseUrl()
-  return `${base}/${encodeURIComponent(key)}`
-}
+// หมายเหตุ: ใช้ multer-s3 แล้ว ไม่ต้องอัปโหลดเองด้วย PutObjectCommand
 
 // Cron job to reset table status daily
 cron.schedule("0 0 * * *", async () => {
@@ -509,7 +498,7 @@ app.get("/api/settings/promptpay", async (req, res) => {
 // ===== PAYMENT SLIP UPLOAD APIs =====
 
 // API สำหรับอัปโหลดสลิปการจ่ายเงิน
-app.post("/api/upload-payment-slip", authenticateToken, upload.single("paymentSlip"), async (req, res) => {
+app.post("/api/upload-payment-slip", authenticateToken, (req, res, next) => { req._uploadPrefix = `payment-slips/${req.user.userId || 'anonymous'}`; next(); }, upload.single("paymentSlip"), async (req, res) => {
   try {
     const { reservationData } = req.body
     const userId = req.user.userId
@@ -521,11 +510,8 @@ app.post("/api/upload-payment-slip", authenticateToken, upload.single("paymentSl
 
     const parsedReservationData = JSON.parse(reservationData)
 
-    // อัปโหลดไฟล์ขึ้น R2
-    const timestamp = Date.now()
-    const original = sanitizeFilename(req.file.originalname || "slip.png")
-    const key = `payment-slips/${userId}/${timestamp}-${original}`
-    const publicUrl = await uploadBufferToR2(req.file.buffer, key, req.file.mimetype)
+    // URL ของไฟล์ที่อัปโหลดบน R2 (multer-s3 จะเติมให้)
+    const publicUrl = req.file.location
 
     console.log("Payment slip uploaded to R2:", publicUrl)
 
@@ -1105,17 +1091,11 @@ app.get("/api/checkToken", authenticateToken, (req, res) => {
 })
 
 // API บันทึกข้อมูลเมนู
-app.post("/api/menus", authenticateToken, authorizeRoles("admin"), upload.single("image"), async (req, res) => {
+app.post("/api/menus", authenticateToken, authorizeRoles("admin"), (req, res, next) => { req._uploadPrefix = "menus"; next(); }, upload.single("image"), async (req, res) => {
   try {
     const { name, price, description, category } = req.body
 
-    let imageUrl = null
-    if (req.file) {
-      const timestamp = Date.now()
-      const original = sanitizeFilename(req.file.originalname || "menu.png")
-      const key = `menus/${timestamp}-${original}`
-      imageUrl = await uploadBufferToR2(req.file.buffer, key, req.file.mimetype)
-    }
+    let imageUrl = req.file ? req.file.location : null
 
     const result = await pool.query(
       "INSERT INTO menus (name, price, description, image_url, category) VALUES ($1, $2, $3, $4 ,$5) RETURNING *",
@@ -1165,20 +1145,14 @@ app.get("/api/menus/:id", async (req, res) => {
 })
 
 //เเก้ไข ชื่อ,ราคา เมนูอาหาร
-app.put("/api/menus/:id", authenticateToken, authorizeRoles("admin"), upload.single("image"), async (req, res) => {
+app.put("/api/menus/:id", authenticateToken, authorizeRoles("admin"), (req, res, next) => { req._uploadPrefix = `menus/${req.params.id}`; next(); }, upload.single("image"), async (req, res) => {
   console.log("🔹 ข้อมูลที่ได้รับจาก Body:", req.body)
   console.log("🔹 ไฟล์ที่อัปโหลด:", req.file)
 
   try {
     const { id } = req.params
     const { name, price, description, category } = req.body
-    let image = null
-    if (req.file) {
-      const timestamp = Date.now()
-      const original = sanitizeFilename(req.file.originalname || "menu.png")
-      const key = `menus/${id}/${timestamp}-${original}`
-      image = await uploadBufferToR2(req.file.buffer, key, req.file.mimetype)
-    }
+    let image = req.file ? req.file.location : null
 
     //ตรวจสอบว่า่ชื่อเมนูห้ามว่างไว้
     if (!name.trim()) {
@@ -1278,16 +1252,13 @@ app.post("/api/category/", authenticateToken, authorizeRoles("admin"), async (re
 })
 
 // API อัปโหลดรูปภาพแผงผังโต๊ะ
-app.post("/api/table_map", authenticateToken, authorizeRoles("admin"), upload.single("image"), async (req, res) => {
+app.post("/api/table_map", authenticateToken, authorizeRoles("admin"), (req, res, next) => { req._uploadPrefix = "table-maps"; next(); }, upload.single("image"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ success: false, message: "กรุณาอัปโหลดรูปภาพ" })
   }
 
   try {
-    const timestamp = Date.now()
-    const original = sanitizeFilename(req.file.originalname || "table-map.png")
-    const key = `table-maps/${timestamp}-${original}`
-    const imagePath = await uploadBufferToR2(req.file.buffer, key, req.file.mimetype)
+    const imagePath = req.file.location
 
     const client = await pool.connect()
     try {
