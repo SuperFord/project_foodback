@@ -83,10 +83,10 @@ app.get("/api/health", (req, res) => {
   })
 })
 
-// R2 S3 Client (ใช้ endpoint จาก .env)
+// R2 S3 Client (ใช้ R2_ENDPOINT สำหรับอัปโหลด)
 const r2 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_PUBLIC_URL,
+  endpoint: process.env.R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
@@ -510,8 +510,8 @@ app.post("/api/upload-payment-slip", authenticateToken, (req, res, next) => { re
 
     const parsedReservationData = JSON.parse(reservationData)
 
-    // URL ของไฟล์ที่อัปโหลดบน R2 (multer-s3 จะเติมให้)
-    const publicUrl = req.file.location
+    // สร้าง URL สำหรับเปิดดูสาธารณะด้วย R2_PUBLIC_URL
+    const publicUrl = `${process.env.R2_PUBLIC_URL}/${req.file.key}`
 
     console.log("Payment slip uploaded to R2:", publicUrl)
 
@@ -1095,7 +1095,7 @@ app.post("/api/menus", authenticateToken, authorizeRoles("admin"), (req, res, ne
   try {
     const { name, price, description, category } = req.body
 
-    let imageUrl = req.file ? req.file.location : null
+    let imageUrl = req.file ? `${process.env.R2_PUBLIC_URL}/${req.file.key}` : null
 
     const result = await pool.query(
       "INSERT INTO menus (name, price, description, image_url, category) VALUES ($1, $2, $3, $4 ,$5) RETURNING *",
@@ -1152,7 +1152,7 @@ app.put("/api/menus/:id", authenticateToken, authorizeRoles("admin"), (req, res,
   try {
     const { id } = req.params
     const { name, price, description, category } = req.body
-    let image = req.file ? req.file.location : null
+    let image = req.file ? `${process.env.R2_PUBLIC_URL}/${req.file.key}` : null
 
     //ตรวจสอบว่า่ชื่อเมนูห้ามว่างไว้
     if (!name.trim()) {
@@ -1258,7 +1258,7 @@ app.post("/api/table_map", authenticateToken, authorizeRoles("admin"), (req, res
   }
 
   try {
-    const imagePath = req.file.location
+    const imagePath = `${process.env.R2_PUBLIC_URL}/${req.file.key}`
 
     const client = await pool.connect()
     try {
