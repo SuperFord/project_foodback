@@ -46,24 +46,7 @@ const ensureSchema = async () => {
       ADD COLUMN IF NOT EXISTS reminder_sent BOOLEAN DEFAULT FALSE
     `)
 
-    // restaurant_admins table (for admin management)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS restaurant_admins (
-        id SERIAL PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'admin',
-        created_at TIMESTAMP DEFAULT NOW()
-      )
-    `)
-
-    // settings.restaurant_email for notifications
-    await pool.query(`
-      ALTER TABLE settings
-      ADD COLUMN IF NOT EXISTS restaurant_email TEXT
-    `)
-
-    console.log("✅ Schema ensured: password_resets, reservations.reminder_sent, restaurant_admins, settings.restaurant_email")
+    console.log("✅ Schema ensured: password_resets table and reservations.reminder_sent column")
   } catch (schemaError) {
     console.error("❌ Error ensuring schema:", schemaError)
   }
@@ -155,75 +138,6 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS,
   },
 })
-
-// Function to send reservation notification email to restaurant admin
-const sendReservationNotificationEmail = async (reservationData) => {
-  try {
-    // Get restaurant admin email from settings or environment variable
-    const settings = await pool.query("SELECT restaurant_email FROM settings LIMIT 1")
-    const adminEmail = settings.rows[0]?.restaurant_email || process.env.RESTAURANT_EMAIL || process.env.EMAIL_USER;
-    
-    const { username, people, date, time, setable, detail, foodorder, paymentSlipId, email } = reservationData;
-    
-    // Create food order summary
-    const foodSummary = foodorder.map(item => 
-      `- ${item.name} x ${item.quantity} - ฿${Number(item.price).toLocaleString()}`
-    ).join('\n');
-    
-    const totalAmount = foodorder.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.price)), 0);
-    
-    // Create payment slip management link if payment slip exists
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: adminEmail,
-      subject: `🆕 การจองโต๊ะใหม่ - ${username}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #f59e0b; text-align: center;">🆕 การจองโต๊ะใหม่</h2>
-          
-          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="color: #374151; margin-top: 0;">📋 รายละเอียดการจอง</h3>
-            <p><strong>ชื่อผู้จอง:</strong> ${username}</p>
-            <p><strong>อีเมล:</strong> ${email || 'ไม่ระบุ'}</p>
-            <p><strong>จำนวนคน:</strong> ${people} คน</p>
-            <p><strong>วันที่:</strong> ${date}</p>
-            <p><strong>เวลา:</strong> ${time}</p>
-            <p><strong>โต๊ะ:</strong> ${setable}</p>
-            ${detail ? `<p><strong>รายละเอียดเพิ่มเติม:</strong> ${detail}</p>` : ''}
-          </div>
-          
-          ${foodorder && foodorder.length > 0 ? `
-          <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0;">
-            <h3 style="color: #92400e; margin-top: 0;">🍽️ รายการอาหารที่สั่งล่วงหน้า</h3>
-            <div style="background-color: white; padding: 15px; border-radius: 6px;">
-              ${foodSummary}
-            </div>
-            <p style="text-align: 0; font-weight: bold; margin-top: 15px;">
-              💰 ราคารวม: ฿${totalAmount.toLocaleString()}
-            </p>
-          </div>
-          ` : ''}
-                    
-          <!-- ลิงค์ร้าน -->
-          <div style="text-align: center; margin-top: 20px;">
-            <a href="${frontendUrl}/restaurant" 
-               style="display: inline-block; background-color: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 0 10px;">
-              🏪 เข้าสู่ระบบร้าน
-            </a>
-            </div>
-          </div>
-        </div>
-      `
-    };
-    
-    await transporter.sendMail(mailOptions);
-    console.log('📧 Reservation notification email sent successfully to:', adminEmail);
-  } catch (error) {
-    console.error('❌ Error sending reservation notification email:', error);
-  }
-};
 
 // Utility functions
 const generateOTP = () => {
@@ -358,88 +272,6 @@ app.post("/api/restaurant/login", async (req, res) => {
       success: false,
       message: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์"
     })
-  }
-})
-
-// ===== RESTAURANT ADMIN MANAGEMENT (CRUD) =====
-
-// Create admin
-app.post("/api/restaurant/admins", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const { username, password, role } = req.body
-    if (!username || !password) {
-      return res.status(400).json({ success: false, message: "กรุณาระบุ username และ password" })
-    }
-    const hashed = await bcrypt.hash(password, 10)
-    const result = await pool.query(
-      `INSERT INTO restaurant_admins (username, password_hash, role) VALUES ($1, $2, $3) RETURNING id, username, role`,
-      [username, hashed, role || "admin"],
-    )
-    res.json({ success: true, admin: result.rows[0] })
-  } catch (error) {
-    if (error.code === "23505") {
-      return res.status(409).json({ success: false, message: "username นี้ถูกใช้งานแล้ว" })
-    }
-    console.error("Create admin error:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
-  }
-})
-
-// List admins
-app.get("/api/restaurant/admins", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, username, role, created_at FROM restaurant_admins ORDER BY id ASC`)
-    res.json({ success: true, admins: result.rows })
-  } catch (error) {
-    console.error("List admins error:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
-  }
-})
-
-// Update admin
-app.put("/api/restaurant/admins/:id", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const { id } = req.params
-    const { username, password, role } = req.body
-    const fields = []
-    const values = []
-    let idx = 1
-
-    if (username !== undefined) { fields.push(`username = $${idx++}`); values.push(username) }
-    if (password !== undefined && password !== "") {
-      const hashed = await bcrypt.hash(password, 10)
-      fields.push(`password_hash = $${idx++}`)
-      values.push(hashed)
-    }
-    if (role !== undefined) { fields.push(`role = $${idx++}`); values.push(role) }
-
-    if (fields.length === 0) {
-      return res.status(400).json({ success: false, message: "ไม่มีข้อมูลสำหรับอัปเดต" })
-    }
-
-    values.push(id)
-    const result = await pool.query(`UPDATE restaurant_admins SET ${fields.join(", ")} WHERE id = $${idx} RETURNING id, username, role`, values)
-    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "ไม่พบผู้ดูแลระบบ" })
-    res.json({ success: true, admin: result.rows[0] })
-  } catch (error) {
-    if (error.code === "23505") {
-      return res.status(409).json({ success: false, message: "username นี้ถูกใช้งานแล้ว" })
-    }
-    console.error("Update admin error:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
-  }
-})
-
-// Delete admin
-app.delete("/api/restaurant/admins/:id", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const { id } = req.params
-    const result = await pool.query(`DELETE FROM restaurant_admins WHERE id = $1`, [id])
-    if (result.rowCount === 0) return res.status(404).json({ success: false, message: "ไม่พบผู้ดูแลระบบ" })
-    res.json({ success: true })
-  } catch (error) {
-    console.error("Delete admin error:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
   }
 })
 
@@ -1052,30 +884,6 @@ app.get("/api/user/payment-slips", authenticateToken, async (req, res) => {
     })
   } catch (error) {
     console.error("Error fetching user payment slips:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการดึงข้อมูล" })
-  }
-})
-
-// API สำหรับตรวจสอบการจองโต๊ะที่ยังไม่เสร็จสิ้นของผู้ใช้
-app.get("/api/user/active-reservations", authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId
-
-    // ดึงการจองโต๊ะที่ยังไม่เสร็จสิ้น (status = 2 หรือ 3)
-    const result = await pool.query(
-      `SELECT * FROM reservations 
-       WHERE user_id = $1 AND status IN (2, 3)
-       ORDER BY created_at DESC`,
-      [userId],
-    )
-
-    res.json({
-      success: true,
-      reservations: result.rows,
-      count: result.rows.length
-    })
-  } catch (error) {
-    console.error("Error fetching user active reservations:", error)
     res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการดึงข้อมูล" })
   }
 })
@@ -2083,91 +1891,10 @@ app.post("/api/reservation", authenticateToken, async (req, res) => {
     }
 
     await client.query("COMMIT")
-
-    // Send email notification for all reservations
-    await sendReservationNotificationEmail({
-      username,
-      email,
-      people,
-      date,
-      time,
-      setable,
-      detail,
-      foodorder: foodorder || [],
-      paymentSlipId
-    });
-
     res.json({ success: true, message: "จองโต๊ะเรียบร้อยเเล้ว" })
   } catch (error) {
     await client.query("ROLLBACK")
     console.error("Error saving reservation:", error)
-    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
-  } finally {
-    client.release()
-  }
-})
-
-// ===== ADMIN: Edit reservation by id (edit foods and tables) =====
-app.put("/api/reservations/:id", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  const { id } = req.params
-  const { username, email, people, date, time, setable, detail, foodorder, tables } = req.body
-  const client = await pool.connect()
-  try {
-    await client.query("BEGIN")
-
-    // Fetch current reservation for reverting table statuses
-    const currentRes = await client.query(`SELECT setable FROM reservations WHERE id = $1`, [id])
-    if (currentRes.rowCount === 0) {
-      await client.query("ROLLBACK")
-      return res.status(404).json({ success: false, message: "ไม่พบการจอง" })
-    }
-
-    const parseTables = (setableStr) => (setableStr || "")
-      .replace("(ต่อโต๊ะ)", "")
-      .split(",")
-      .map(t => t.trim())
-      .filter(Boolean)
-
-    const oldTables = parseTables(currentRes.rows[0].setable)
-
-    // Update reservation core fields
-    await client.query(
-      `UPDATE reservations SET username = COALESCE($1, username), email = COALESCE($2, email), people = COALESCE($3, people), date = COALESCE($4, date), time = COALESCE($5, time), setable = COALESCE($6, setable), detail = COALESCE($7, detail) WHERE id = $8`,
-      [username ?? null, email ?? null, people ?? null, date ?? null, time ?? null, setable ?? null, detail ?? null, id]
-    )
-
-    // Replace foods if provided
-    if (Array.isArray(foodorder)) {
-      await client.query(`DELETE FROM reservation_foods WHERE reservation_id = $1`, [id])
-      for (const item of foodorder) {
-        await client.query(
-          `INSERT INTO reservation_foods (reservation_id, name, price, quantity) VALUES ($1, $2, $3, $4)`,
-          [id, item.name, item.price, item.quantity]
-        )
-      }
-    }
-
-    // Update table statuses if tables provided
-    if (Array.isArray(tables)) {
-      // Free old tables
-      for (const t of oldTables) {
-        await client.query(
-          `UPDATE table_layout SET status = 1 WHERE TRIM(tname) = $1 OR CAST(tnumber AS TEXT) = $1`,
-          [t]
-        )
-      }
-      // Occupy new tables
-      await client.query(
-        `UPDATE table_layout SET status = 2 WHERE tname = ANY($1::text[]) OR tnumber = ANY($1::text[])`,
-        [tables]
-      )
-    }
-
-    await client.query("COMMIT")
-    res.json({ success: true, message: "อัปเดตการจองสำเร็จ" })
-  } catch (error) {
-    await client.query("ROLLBACK")
-    console.error("❌ Error updating reservation:", error)
     res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
   } finally {
     client.release()
@@ -2219,21 +1946,6 @@ app.post("/api/reseredit", authenticateToken, async (req, res) => {
     }
 
     await client.query("COMMIT")
-    
-    // Send email notification for reservation edit
-    if (foodorder && foodorder.length > 0) {
-      await sendReservationNotificationEmail({
-        username: email, // Use email as username for edit notifications
-        email,
-        people,
-        date: new Date().toLocaleDateString('th-TH'),
-        time,
-        setable: "แก้ไขการจอง",
-        detail,
-        foodorder
-      });
-    }
-    
     res.json({ success: true, message: "อัปเดทการจองเรียบร้อยเเล้ว" })
   } catch (error) {
     await client.query("ROLLBACK")
@@ -2593,92 +2305,10 @@ app.use((error, req, res, next) => {
   })
 })
 
-// API สำหรับตั้งค่าอีเมลแอดมินร้าน
-app.post("/api/restaurant/set-admin-email", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "กรุณากรอกอีเมล"
-      });
-    }
-    
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({
-        success: false,
-        message: "รูปแบบอีเมลไม่ถูกต้อง"
-      });
-    }
-    
-    // Store in database settings table
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      
-      // Check if settings table exists and has restaurant_email column
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS settings (
-          id SERIAL PRIMARY KEY,
-          restaurant_email TEXT,
-          created_at TIMESTAMP DEFAULT NOW()
-        )
-      `);
-      
-      // Insert or update restaurant email
-      await client.query(`
-        INSERT INTO settings (restaurant_email) VALUES ($1)
-        ON CONFLICT (id) DO UPDATE SET restaurant_email = $1
-      `, [email]);
-      
-      await client.query("COMMIT");
-      
-      res.json({
-        success: true,
-        message: "ตั้งค่าอีเมลแอดมินสำเร็จ"
-      });
-    } catch (dbError) {
-      await client.query("ROLLBACK");
-      throw dbError;
-    } finally {
-      client.release();
-    }
-  } catch (error) {
-    console.error("Error setting admin email:", error);
-    res.status(500).json({
-      success: false,
-      message: "เกิดข้อผิดพลาดในการตั้งค่าอีเมล"
-    });
-  }
-});
-
-// API สำหรับดึงอีเมลแอดมินร้าน
-app.get("/api/restaurant/admin-email", authenticateToken, authorizeRoles("admin"), async (req, res) => {
-  try {
-    const result = await pool.query("SELECT restaurant_email FROM settings LIMIT 1");
-    const adminEmail = result.rows[0]?.restaurant_email || process.env.RESTAURANT_EMAIL || process.env.EMAIL_USER;
-    
-    res.json({
-      success: true,
-      email: adminEmail
-    });
-  } catch (error) {
-    console.error("Error getting admin email:", error);
-    res.status(500).json({
-      success: false,
-      message: "เกิดข้อผิดพลาดในการดึงข้อมูลอีเมล"
-    });
-  }
-});
-
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`)
   console.log(`📍 Health check: http://localhost:${PORT}/api/health`)
-  console.log("🚀 Server setup completed with Email Notification System")
-  console.log("📧 Email notifications will be sent to restaurant admin")
+  console.log("🚀 Server setup completed with Payment Slip Upload feature")
   console.log("📁 Payment slips will be saved to: ./uploads/Payment slip/")
 })
