@@ -156,6 +156,75 @@ const transporter = nodemailer.createTransport({
   },
 })
 
+// Function to send reservation notification email to restaurant admin
+const sendReservationNotificationEmail = async (reservationData) => {
+  try {
+    // Get restaurant admin email from settings or environment variable
+    const settings = await pool.query("SELECT restaurant_email FROM settings LIMIT 1")
+    const adminEmail = settings.rows[0]?.restaurant_email || process.env.RESTAURANT_EMAIL || process.env.EMAIL_USER;
+    
+    const { username, people, date, time, setable, detail, foodorder, paymentSlipId, email } = reservationData;
+    
+    // Create food order summary
+    const foodSummary = foodorder.map(item => 
+      `- ${item.name} x ${item.quantity} - ฿${Number(item.price).toLocaleString()}`
+    ).join('\n');
+    
+    const totalAmount = foodorder.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.price)), 0);
+    
+    // Create payment slip management link if payment slip exists
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: adminEmail,
+      subject: `🆕 การจองโต๊ะใหม่ - ${username}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f59e0b; text-align: center;">🆕 การจองโต๊ะใหม่</h2>
+          
+          <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #374151; margin-top: 0;">📋 รายละเอียดการจอง</h3>
+            <p><strong>ชื่อผู้จอง:</strong> ${username}</p>
+            <p><strong>อีเมล:</strong> ${email || 'ไม่ระบุ'}</p>
+            <p><strong>จำนวนคน:</strong> ${people} คน</p>
+            <p><strong>วันที่:</strong> ${date}</p>
+            <p><strong>เวลา:</strong> ${time}</p>
+            <p><strong>โต๊ะ:</strong> ${setable}</p>
+            ${detail ? `<p><strong>รายละเอียดเพิ่มเติม:</strong> ${detail}</p>` : ''}
+          </div>
+          
+          ${foodorder && foodorder.length > 0 ? `
+          <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #92400e; margin-top: 0;">🍽️ รายการอาหารที่สั่งล่วงหน้า</h3>
+            <div style="background-color: white; padding: 15px; border-radius: 6px;">
+              ${foodSummary}
+            </div>
+            <p style="text-align: 0; font-weight: bold; margin-top: 15px;">
+              💰 ราคารวม: ฿${totalAmount.toLocaleString()}
+            </p>
+          </div>
+          ` : ''}
+                    
+          <!-- ลิงค์ร้าน -->
+          <div style="text-align: center; margin-top: 20px;">
+            <a href="${frontendUrl}/restaurant" 
+               style="display: inline-block; background-color: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; margin: 0 10px;">
+              🏪 เข้าสู่ระบบร้าน
+            </a>
+            </div>
+          </div>
+        </div>
+      `
+    };
+    
+    await transporter.sendMail(mailOptions);
+    console.log('📧 Reservation notification email sent successfully to:', adminEmail);
+  } catch (error) {
+    console.error('❌ Error sending reservation notification email:', error);
+  }
+};
+
 // Utility functions
 const generateOTP = () => {
   return Math.floor(100000 + Math.random() * 900000).toString()
@@ -1991,32 +2060,18 @@ app.post("/api/reservation", authenticateToken, async (req, res) => {
 
     await client.query("COMMIT")
 
-    // Notify restaurant by email (best-effort; does not block response)
-    try {
-      const settings = await pool.query("SELECT restaurant_email FROM settings LIMIT 1")
-      const restaurantEmail = settings.rows[0]?.restaurant_email || process.env.RESTAURANT_EMAIL
-      if (restaurantEmail) {
-        const foodLines = (foodorder || []).map(f => `<li>${f.name} x ${f.quantity} - ฿${Number(f.price).toLocaleString()}</li>`).join("")
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
-          to: restaurantEmail,
-          subject: "มีการจองโต๊ะใหม่",
-          html: `
-            <h3>มีการจองใหม่</h3>
-            <p><strong>ชื่อ:</strong> ${username}</p>
-            <p><strong>อีเมล:</strong> ${email}</p>
-            <p><strong>วันที่:</strong> ${date}</p>
-            <p><strong>เวลา:</strong> ${time}</p>
-            <p><strong>โต๊ะ:</strong> ${setable}</p>
-            <p><strong>จำนวนคน:</strong> ${people}</p>
-            ${foodLines ? `<p><strong>รายการอาหาร:</strong></p><ul>${foodLines}</ul>` : ""}
-            ${detail ? `<p><strong>รายละเอียดเพิ่มเติม:</strong> ${detail}</p>` : ""}
-          `,
-        })
-      }
-    } catch (mailErr) {
-      console.error("❌ Error sending restaurant notification:", mailErr)
-    }
+    // Send email notification for all reservations
+    await sendReservationNotificationEmail({
+      username,
+      email,
+      people,
+      date,
+      time,
+      setable,
+      detail,
+      foodorder: foodorder || [],
+      paymentSlipId
+    });
 
     res.json({ success: true, message: "จองโต๊ะเรียบร้อยเเล้ว" })
   } catch (error) {
@@ -2140,6 +2195,21 @@ app.post("/api/reseredit", authenticateToken, async (req, res) => {
     }
 
     await client.query("COMMIT")
+    
+    // Send email notification for reservation edit
+    if (foodorder && foodorder.length > 0) {
+      await sendReservationNotificationEmail({
+        username: email, // Use email as username for edit notifications
+        email,
+        people,
+        date: new Date().toLocaleDateString('th-TH'),
+        time,
+        setable: "แก้ไขการจอง",
+        detail,
+        foodorder
+      });
+    }
+    
     res.json({ success: true, message: "อัปเดทการจองเรียบร้อยเเล้ว" })
   } catch (error) {
     await client.query("ROLLBACK")
@@ -2499,10 +2569,92 @@ app.use((error, req, res, next) => {
   })
 })
 
+// API สำหรับตั้งค่าอีเมลแอดมินร้าน
+app.post("/api/restaurant/set-admin-email", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "กรุณากรอกอีเมล"
+      });
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "รูปแบบอีเมลไม่ถูกต้อง"
+      });
+    }
+    
+    // Store in database settings table
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      
+      // Check if settings table exists and has restaurant_email column
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS settings (
+          id SERIAL PRIMARY KEY,
+          restaurant_email TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        )
+      `);
+      
+      // Insert or update restaurant email
+      await client.query(`
+        INSERT INTO settings (restaurant_email) VALUES ($1)
+        ON CONFLICT (id) DO UPDATE SET restaurant_email = $1
+      `, [email]);
+      
+      await client.query("COMMIT");
+      
+      res.json({
+        success: true,
+        message: "ตั้งค่าอีเมลแอดมินสำเร็จ"
+      });
+    } catch (dbError) {
+      await client.query("ROLLBACK");
+      throw dbError;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error("Error setting admin email:", error);
+    res.status(500).json({
+      success: false,
+      message: "เกิดข้อผิดพลาดในการตั้งค่าอีเมล"
+    });
+  }
+});
+
+// API สำหรับดึงอีเมลแอดมินร้าน
+app.get("/api/restaurant/admin-email", authenticateToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const result = await pool.query("SELECT restaurant_email FROM settings LIMIT 1");
+    const adminEmail = result.rows[0]?.restaurant_email || process.env.RESTAURANT_EMAIL || process.env.EMAIL_USER;
+    
+    res.json({
+      success: true,
+      email: adminEmail
+    });
+  } catch (error) {
+    console.error("Error getting admin email:", error);
+    res.status(500).json({
+      success: false,
+      message: "เกิดข้อผิดพลาดในการดึงข้อมูลอีเมล"
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`)
   console.log(`📍 Health check: http://localhost:${PORT}/api/health`)
-  console.log("🚀 Server setup completed with Payment Slip Upload feature")
+  console.log("🚀 Server setup completed with Email Notification System")
+  console.log("📧 Email notifications will be sent to restaurant admin")
   console.log("📁 Payment slips will be saved to: ./uploads/Payment slip/")
 })
