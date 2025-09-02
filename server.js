@@ -1056,6 +1056,30 @@ app.get("/api/user/payment-slips", authenticateToken, async (req, res) => {
   }
 })
 
+// API สำหรับตรวจสอบการจองโต๊ะที่ยังไม่เสร็จสิ้นของผู้ใช้
+app.get("/api/user/active-reservations", authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId
+
+    // ดึงการจองโต๊ะที่ยังไม่เสร็จสิ้น (status = 2 หรือ 3)
+    const result = await pool.query(
+      `SELECT * FROM reservations 
+       WHERE user_id = $1 AND status IN (2, 3)
+       ORDER BY created_at DESC`,
+      [userId],
+    )
+
+    res.json({
+      success: true,
+      reservations: result.rows,
+      count: result.rows.length
+    })
+  } catch (error) {
+    console.error("Error fetching user active reservations:", error)
+    res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในการดึงข้อมูล" })
+  }
+})
+
 // ===== USER REGISTRATION & AUTHENTICATION =====
 
 app.post("/api/register", async (req, res) => {
