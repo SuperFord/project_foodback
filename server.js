@@ -2420,7 +2420,7 @@ app.post("/api/request-reset-password", async (req, res) => {
     }
 
     const token = uuidv4() // UUID สำหรับ reset
-    const expires = new Date(Date.now() + 10 * 60 * 1000) // 10 นาที
+    const expires = new Date(Date.now() + 60 * 60 * 1000) // 1 ชั่วโมง
 
     await pool.query(
       `INSERT INTO password_resets (email, token, expires_at) VALUES ($1, $2, $3)
@@ -2428,7 +2428,7 @@ app.post("/api/request-reset-password", async (req, res) => {
       [email, token, expires],
     )
 
-    const resetLink = `http://localhost:3000/reset-password/${token}`
+    const resetLink = `${frontendUrl}/reset-password/${token}`
 
     const mailOptions = {
       from: process.env.EMAIL_USER,
@@ -2526,7 +2526,7 @@ cron.schedule("* * * * *", async () => {
   }
 })
 
-// Cron Job รีเซ็ตการจองโต๊ะหลัง 00:10 น. ทุกวัน
+// Cron Job รีเซ็ตการจองโต๊ะหลัง 00:15 น. ทุกวัน
 cron.schedule("15 0 * * *", async () => {
   try {
     const now = new Date()
