@@ -2413,6 +2413,23 @@ app.post("/api/request-reset-password", async (req, res) => {
   const { email } = req.body
 
   try {
+    // ตรวจสอบว่ามี email หรือไม่
+    if (!email) {
+      return res.status(400).json({ success: false, message: "กรุณากรอกอีเมล" })
+    }
+
+    // ตรวจสอบรูปแบบอีเมล
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ success: false, message: "รูปแบบอีเมลไม่ถูกต้อง" })
+    }
+
+    // ตรวจสอบการตั้งค่า email
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.error("Email configuration missing: EMAIL_USER or EMAIL_PASS not set")
+      return res.status(500).json({ success: false, message: "การตั้งค่าอีเมลไม่ครบถ้วน" })
+    }
+
     const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email])
 
     if (userResult.rows.length === 0) {
@@ -2428,6 +2445,7 @@ app.post("/api/request-reset-password", async (req, res) => {
       [email, token, expires],
     )
 
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000'
     const resetLink = `${frontendUrl}/reset-password/${token}`
 
     const mailOptions = {
@@ -2444,6 +2462,16 @@ app.post("/api/request-reset-password", async (req, res) => {
     res.json({ success: true, message: "ส่งลิงก์เปลี่ยนรหัสผ่านเรียบร้อยแล้ว" })
   } catch (err) {
     console.error("Request reset error:", err)
+    
+    // แยกประเภท error เพื่อให้ข้อความที่ชัดเจนขึ้น
+    if (err.code === 'ECONNREFUSED') {
+      return res.status(500).json({ success: false, message: "ไม่สามารถเชื่อมต่อฐานข้อมูลได้" })
+    } else if (err.code === 'EAUTH') {
+      return res.status(500).json({ success: false, message: "การตั้งค่าอีเมลไม่ถูกต้อง" })
+    } else if (err.message && err.message.includes('uuid')) {
+      return res.status(500).json({ success: false, message: "ไม่สามารถสร้าง token ได้" })
+    }
+    
     res.status(500).json({ success: false, message: "เกิดข้อผิดพลาดในระบบ" })
   }
 })
