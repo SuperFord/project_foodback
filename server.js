@@ -2659,6 +2659,67 @@ app.post("/api/restaurant/set-admin-email", authenticateToken, authorizeRoles("a
   }
 });
 
+// API สำหรับเปลี่ยนรหัสผ่านของ admin ปัจจุบัน
+app.put("/api/restaurant/change-password", authenticateToken, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const adminId = req.user.id;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "กรุณากรอกรหัสผ่านปัจจุบันและรหัสผ่านใหม่"
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร"
+      });
+    }
+
+    // ตรวจสอบรหัสผ่านปัจจุบัน
+    const result = await pool.query(
+      "SELECT password_hash FROM restaurant_admins WHERE id = $1",
+      [adminId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "ไม่พบข้อมูลผู้ดูแลระบบ"
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
+    if (!isValidPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "รหัสผ่านปัจจุบันไม่ถูกต้อง"
+      });
+    }
+
+    // อัปเดตรหัสผ่านใหม่
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      "UPDATE restaurant_admins SET password_hash = $1 WHERE id = $2",
+      [hashedNewPassword, adminId]
+    );
+
+    res.json({
+      success: true,
+      message: "เปลี่ยนรหัสผ่านสำเร็จ"
+    });
+  } catch (error) {
+    console.error("Error changing password:", error);
+    res.status(500).json({
+      success: false,
+      message: "เกิดข้อผิดพลาดในการเปลี่ยนรหัสผ่าน"
+    });
+  }
+});
+
 // API สำหรับดึงอีเมลแอดมินร้าน
 app.get("/api/restaurant/admin-email", authenticateToken, authorizeRoles("admin"), async (req, res) => {
   try {
