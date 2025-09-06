@@ -2662,13 +2662,13 @@ app.post("/api/restaurant/set-admin-email", authenticateToken, authorizeRoles("a
 // API สำหรับเปลี่ยนรหัสผ่านของ admin ปัจจุบัน
 app.put("/api/restaurant/change-password", authenticateToken, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const { newPassword } = req.body;
     const adminId = req.user.id;
 
-    if (!currentPassword || !newPassword) {
+    if (!newPassword) {
       return res.status(400).json({
         success: false,
-        message: "กรุณากรอกรหัสผ่านปัจจุบันและรหัสผ่านใหม่"
+        message: "กรุณากรอกรหัสผ่านใหม่"
       });
     }
 
@@ -2679,9 +2679,9 @@ app.put("/api/restaurant/change-password", authenticateToken, async (req, res) =
       });
     }
 
-    // ตรวจสอบรหัสผ่านปัจจุบัน
+    // ตรวจสอบว่า admin มีอยู่จริง
     const result = await pool.query(
-      "SELECT password_hash FROM restaurant_admins WHERE id = $1",
+      "SELECT id FROM restaurant_admins WHERE id = $1",
       [adminId]
     );
 
@@ -2689,14 +2689,6 @@ app.put("/api/restaurant/change-password", authenticateToken, async (req, res) =
       return res.status(404).json({
         success: false,
         message: "ไม่พบข้อมูลผู้ดูแลระบบ"
-      });
-    }
-
-    const isValidPassword = await bcrypt.compare(currentPassword, result.rows[0].password_hash);
-    if (!isValidPassword) {
-      return res.status(400).json({
-        success: false,
-        message: "รหัสผ่านปัจจุบันไม่ถูกต้อง"
       });
     }
 
