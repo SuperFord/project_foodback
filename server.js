@@ -474,7 +474,27 @@ app.get("/api/restaurant/verify", authenticateToken, async (req, res) => {
 
 // ===== QR PAYMENT SETTINGS API =====
 
-// GET - ดึงการตั้งค่า QR ทั้งหมด
+// GET - ดึงการตั้งค่า QR สำหรับผู้ใช้ทั่วไป (Public)
+app.get("/api/settings/qr-status", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT enable_qr_payment, promptpay_number FROM settings LIMIT 1",
+    )
+
+    const row = result.rows[0] || {}
+
+    res.json({
+      success: true,
+      enableQR: row.enable_qr_payment || false,
+      promptpayNumber: row.promptpay_number || "",
+    })
+  } catch (error) {
+    console.error("Error fetching QR status:", error)
+    res.status(500).json({ success: false, message: "Server error" })
+  }
+})
+
+// GET - ดึงการตั้งค่า QR ทั้งหมด (Admin only)
 app.get("/api/settings/qr-payment", authenticateToken, authorizeRoles("admin"), async (req, res) => {
   try {
     const result = await pool.query(
